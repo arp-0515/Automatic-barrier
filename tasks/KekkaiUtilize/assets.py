@@ -116,7 +116,8 @@ class KekkaiUtilizeAssets:
 	# description 
 	I_U_CONFIRM_SMALL = RuleImage(roi_front=(672,513,131,60), roi_back=(672,513,131,60), threshold=0.8, method="Template matching", file="./tasks/KekkaiUtilize/utilize/utilize_u_confirm_small.png")
 	# 式神放置面板（好友结界有空位时点进入结界直接弹出）顶部"可放置式神寄养"按钮 
-	I_U_REALM_PICKER = RuleImage(roi_front=(1036,20,158,24), roi_back=(1000,10,230,50), threshold=0.7, method="Template matching", file="./tasks/KekkaiUtilize/utilize/utilize_u_realm_picker.png")
+	# 实测该按钮模板实际出现在 x≈859(y21)（shot_1 实测 0.817），ROI 需左移加宽覆盖 x≈800-1230
+	I_U_REALM_PICKER = RuleImage(roi_front=(859,21,158,24), roi_back=(800,10,430,50), threshold=0.7, method="Template matching", file="./tasks/KekkaiUtilize/utilize/utilize_u_realm_picker.png")
 	# 放置面板确认框标题"确认寄养所选式神？" 
 	I_U_REALM_CONFIRM = RuleImage(roi_front=(527,149,225,27), roi_back=(500,130,300,60), threshold=0.7, method="Template matching", file="./tasks/KekkaiUtilize/utilize/utilize_u_realm_confirm.png")
 

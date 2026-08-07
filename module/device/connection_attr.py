@@ -19,6 +19,7 @@ class ConnectionAttr:
 
     adb_binary_list = [
         './bin/adb/adb.exe',
+        './.venv/Lib/site-packages/adbutils/binaries/adb.exe',
         './toolkit/Lib/site-packages/adbutils/binaries/adb.exe',
         '/usr/bin/adb'
     ]
@@ -222,24 +223,22 @@ class ConnectionAttr:
 
     @cached_property
     def adb_binary(self):
-        # Try adb in deploy.yaml
-        # from module.webui.setting import State
-        # file = State.deploy_config.AdbExecutable
-        # file = file.replace('\\', '/')
-        # if os.path.exists(file):
-        #     return os.path.abspath(file)
-        #
-        # # Try existing adb.exe
-        # for file in self.adb_binary_list:
-        #     if os.path.exists(file):
-        #         return os.path.abspath(file)
+        # Try existing adb.exe
+        for file in self.adb_binary_list:
+            if os.path.exists(file):
+                return os.path.abspath(file)
 
         # Try adb in python environment
         import sys
-        file = os.path.join(sys.executable, '../Lib/site-packages/adbutils/binaries/adb.exe')
-        file = os.path.abspath(file).replace('\\', '/')
-        if os.path.exists(file):
-            return file
+        python_dir = os.path.dirname(sys.executable)
+        # venv: <venv>/Scripts/python.exe -> <venv>/Lib/site-packages/adbutils/binaries/adb.exe
+        # base: <python>/python.exe -> <python>/Lib/site-packages/adbutils/binaries/adb.exe
+        for rel in ('../Lib/site-packages/adbutils/binaries/adb.exe',
+                    'Lib/site-packages/adbutils/binaries/adb.exe'):
+            file = os.path.join(python_dir, rel)
+            file = os.path.abspath(file).replace('\\', '/')
+            if os.path.exists(file):
+                return file
 
         # Use adb in system PATH
         file = 'adb'

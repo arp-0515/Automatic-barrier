@@ -510,10 +510,12 @@ class Script:
         self.run("GotoMain")
         self.device.release_during_wait()
         try:
+            restart_enabled = self.config.model.restart.scheduler.enable
             restart_next = self.config.model.restart.scheduler.next_run
         except AttributeError:
+            restart_enabled = None
             restart_next = None
-        if isinstance(restart_next, datetime) and restart_next <= datetime.now():
+        if restart_enabled and isinstance(restart_next, datetime) and restart_next <= datetime.now():
             logger.info("Game not running, restart scheduled, wake scheduler")
             return False
         return self.wait_until(next_run)

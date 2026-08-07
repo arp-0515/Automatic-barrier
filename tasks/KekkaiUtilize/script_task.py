@@ -1,8 +1,10 @@
 # This Python file uses the following encoding: utf-8
 # @author runhey
 # github https://github.com/runhey
+import json
 import re
 import time
+from pathlib import Path
 from cached_property import cached_property
 from datetime import timedelta, datetime
 
@@ -31,6 +33,8 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
     jade_max_num = 0
     moon_max_num = 0
     first_utilize = True
+    # 失败卡记录文件（按天持久化，避免同一天反复蹭同一张失败的卡）
+    SKIP_FILE = Path('./log/kekkai_utilize_skip.json')
 
     def run(self):
         con = self.config.kekkai_utilize.utilize_config
@@ -393,8 +397,8 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
     def order_targets(self) -> ImageGrid:
         rule = self.config.kekkai_utilize.utilize_config.utilize_rule
         if rule == UtilizeRule.DEFAULT:
-            return ImageGrid([self.I_U_TAIKO_6, self.I_U_FISH_6, self.I_U_TAIKO_5, self.I_U_FISH_5,
-                              self.I_U_TAIKO_4, self.I_U_FISH_4, self.I_U_TAIKO_3, self.I_U_FISH_3,
+            return ImageGrid([self.I_U_TAIKO_6, self.I_U_TAIKO_5, self.I_U_TAIKO_4, self.I_U_FISH_6, self.I_U_FISH_5,
+                              self.I_U_FISH_4, self.I_U_TAIKO_3, self.I_U_FISH_3,
                               self.I_U_MOON_6, self.I_U_MOON_5, self.I_U_MOON_4, self.I_U_MOON_3,
                               self.I_U_MOON_2])
         elif rule == UtilizeRule.FISH:
@@ -410,9 +414,10 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         rule = self.config.kekkai_utilize.utilize_config.utilize_rule
         result = []
         if rule == UtilizeRule.DEFAULT:
-            result = [CardClass.TAIKO6, CardClass.FISH6, CardClass.TAIKO5, CardClass.FISH5,
-                      CardClass.TAIKO4, CardClass.FISH4, CardClass.TAIKO3, CardClass.FISH3,
-                      CardClass.MOON6, CardClass.MOON5, CardClass.MOON4, CardClass.MOON3, CardClass.MOON2]
+            result = [CardClass.TAIKO6, CardClass.TAIKO5, CardClass.TAIKO4, CardClass.FISH6,
+                      CardClass.FISH5, CardClass.FISH4, CardClass.TAIKO3, CardClass.FISH3,
+                      CardClass.MOON6, CardClass.MOON5, CardClass.MOON4, CardClass.MOON3, CardClass.MOON2,
+                      CardClass.MOON1]
         elif rule == UtilizeRule.FISH:
             result = [CardClass.FISH6, CardClass.FISH5,
                       CardClass.TAIKO6, CardClass.TAIKO5, CardClass.FISH4, CardClass.TAIKO4, CardClass.FISH3,
@@ -475,10 +480,6 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
             if self.appear(self.I_SHI_CARD) or self.appear(self.I_SHI_DEFENSE):
                 logger.info('Appear friend realm view (no free slot)')
                 break
-            if wait_timer.reached():
-                self.save_image(wait_time=0, push_flag=False, content='进入好友结界超时', image_type='png')
-                logger.warning('Appear friend realm timeout')
-                return
             # 还在借卡界面/加载中，继续点击进入结界
             if self.appear_then_click(self.I_CHECK_FRIEND_REALM_2, interval=1.5):
                 logger.info('Click too fast to enter the friend\'s realm pool')
@@ -486,6 +487,12 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
             if self.appear_then_click(self.I_U_ENTER_REALM, interval=2.5):
                 time.sleep(0.5)
                 continue
+            if wait_timer.reached():
+                # 超时未检测到放置面板/好友结界视图：标记该卡失败，回退重选下一张
+                self.save_image(wait_time=0, push_flag=False, content='进入好友结界超时', image_type='png')
+                logger.warning('Appear friend realm timeout, mark card failed and retry next card')
+                self._mark_card_failed('进入结界超时')
+                return
 
         # 无坑位（好友结界已满）
         if self.appear(self.I_SHI_CARD) or self.appear(self.I_SHI_DEFENSE):
@@ -521,6 +528,7 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         timer.start()
         tap_timer = Timer(2.0).start()
         clicked_confirm = False
+        button_clicked = False
         pos_index = 0
         while 1:
             self.screenshot()
@@ -537,6 +545,16 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
                 return True
             # 面板还在且无确认框 -> 点式神格子
             if not clicked_confirm and tap_timer.reached_and_reset():
+                # 连点几个格子都弹不出确认框：可能是只显示了标题/好友式神育成视图，
+                # 尝试点击"可放置式神寄养"按钮打开真正的放置面板
+                if not button_clicked and pos_index >= 2:
+                    button_clicked = True
+                    if self.appear(self.I_U_REALM_PICKER):
+                        x, y = self.I_U_REALM_PICKER.front_center()
+                        self.device.click(x=x, y=y, control_name=self.I_U_REALM_PICKER.name)
+                        logger.info('Click "可放置式神寄养" button to open placement panel')
+                        time.sleep(1.5)
+                        continue
                 pos = order_list[pos_index % len(order_list)]
                 pos_index += 1
                 self.click(click_match[pos], interval=1)
@@ -549,8 +567,47 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
                 self.save_image(content='放置式神超时', wait_time=0, push_flag=False, image_type='png')
                 return False
 
+    def _load_skip_cards(self) -> set:
+        """加载当日失败卡列表, 返回 {(card_type, card_value, source)} 集合"""
+        try:
+            with open(self.SKIP_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            today = datetime.now().strftime('%Y-%m-%d')
+            return set(tuple(x) for x in data.get(today, []))
+        except Exception:
+            return set()
+
+    def _save_skip_cards(self, skip: set):
+        """将失败卡列表持久化到当日记录"""
+        try:
+            data = {}
+            try:
+                with open(self.SKIP_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+            today = datetime.now().strftime('%Y-%m-%d')
+            data[today] = [list(x) for x in skip]
+            Path(self.SKIP_FILE).parent.mkdir(parents=True, exist_ok=True)
+            with open(self.SKIP_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f'保存跳过卡列表失败: {e}')
+
+    def _mark_card_failed(self, reason: str = ''):
+        """把当前选中的结界卡标记为失败并持久化, 之后的选择流程会自动跳过"""
+        if self._selected_card is None:
+            logger.warning(f'未记录当前选中卡, 无法跳过. reason={reason}')
+            return
+        self.failed_cards.add(self._selected_card)
+        self._save_skip_cards(self.failed_cards)
+        card_type, card_value, source = self._selected_card
+        logger.warning(f'⛔ 标记失败卡并跳过: {card_type}@{card_value} ({source}) 原因:{reason}')
+
     def _select_optimal_resource_card(self):
-        """智能选卡主逻辑：按寄养规则优先级（太鼓6>斗鱼6>太鼓5>斗鱼5>太鼓4>斗鱼4>太鼓3>斗鱼3>太阴）选择最佳结界卡"""
+        """智能选卡主逻辑：按寄养规则优先级（太鼓6>太鼓5>太鼓4>斗鱼6>斗鱼5>斗鱼4>太鼓3>斗鱼3>太阴6>太阴5>太阴4>太阴3>太阴2>太阴1）选择最佳结界卡"""
+        self.failed_cards = self._load_skip_cards()
+        self._selected_card = None
         logger.hr('第一阶段：初始记录获取', 2)
         best_rank, best_value = self._explore_record()
         if best_rank is None:
@@ -574,7 +631,8 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
     @staticmethod
     def _card_rank(target) -> int:
         """根据匹配到的模板计算卡片优先级排名（越小越优先）
-        太鼓6→1 斗鱼6→2 太鼓5→3 斗鱼5→4 太鼓4→5 斗鱼4→6 太鼓3→7 斗鱼3→8 太阴6→9 ...
+        太鼓6→1 太鼓5→2 太鼓4→3 斗鱼6→4 斗鱼5→5 斗鱼4→6 太鼓3→7 斗鱼3→8
+        太阴6→9 太阴5→10 太阴4→11 太阴3→12 太阴2→13 太阴1→14
         """
         name = target.name
         try:
@@ -582,9 +640,15 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         except (ValueError, IndexError):
             return 99
         if 'TAIKO' in name:
-            return (6 - tier) * 2 + 1
+            if tier >= 4:
+                return 7 - tier
+            if tier == 3:
+                return 7
         if 'FISH' in name:
-            return (6 - tier) * 2 + 2
+            if tier >= 4:
+                return 10 - tier
+            if tier == 3:
+                return 8
         if 'MOON' in name:
             return 9 + (6 - tier)
         return 99
@@ -607,68 +671,68 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         self.switch_friend_list(SelectFriendList.SAME_SERVER)
 
     def _explore_record(self):
-        """探索模式：扫描好友列表记录最佳结界卡
+        """探索模式：合并扫描同服与跨服好友列表，记录最佳结界卡
         :return: (best_rank, best_value)；未找到返回 (None, 0)
         """
         MAX_SWIPES = 20  # 最大滑动次数
-        CONSEC_MISS = 3  # 允许连续无卡次数
         TIMEOUT = 120  # 操作超时(秒)
-        logger.info('启动探索模式')
-        timer = Timer(TIMEOUT).start()
-        miss_count = 0
+        logger.info('启动探索模式（合并同服+跨服好友列表）')
         best_rank, best_value = None, 0
         self.ap_max_num, self.jade_max_num, self.moon_max_num = 0, 0, 0
         record_attr_map = {'太鼓': 'jade_max_num', '斗鱼': 'ap_max_num', '太阴': 'moon_max_num'}
 
-        for swipe_count in range(MAX_SWIPES + 1):
-            # 超时检测
-            if timer.reached():
-                logger.warning('⏰ 操作超时，终止探索')
-                break
-
-            # 截图识别结界卡
-            self.screenshot()
-            cards = self.order_targets.find_everyone(self.device.image)
-
-            # 处理无卡情况
-            if not cards:
-                miss_count += 1
-                logger.info(f'第{swipe_count}次滑动 | 未检测到结界卡' if swipe_count > 0 else '初始界面 | 未检测到结界卡')
-                if miss_count > CONSEC_MISS:
-                    logger.warning(f'⚠️ 连续{miss_count}次 | 未检测到结界卡, 终止探索')
+        for friend in (SelectFriendList.SAME_SERVER, SelectFriendList.DIFFERENT_SERVER):
+            self.switch_friend_list(friend)
+            timer = Timer(TIMEOUT).start()
+            for swipe_count in range(MAX_SWIPES + 1):
+                # 超时检测
+                if timer.reached():
+                    logger.warning('⏰ 操作超时，终止探索')
                     break
+
+                # 截图识别结界卡
+                self.screenshot()
+                cards = self.order_targets.find_everyone(self.device.image)
+
+                # 未检测到结界卡则立即停止滑动
+                if not cards:
+                    logger.warning(f'⚠️ [{friend}] 未检测到结界卡，停止滑动')
+                    break
+
+                for target, _, area in cards:
+                    # 点击结界卡获取详情
+                    self.C_SELECT_CARD.roi_front = area
+                    self.click(self.C_SELECT_CARD)
+                    self.device.click_record_clear()
+                    time.sleep(2)
+
+                    # 解析结界卡类型和数值
+                    card_type, card_value = self.check_card_num()
+
+                    # 跳过无效结界卡
+                    if card_type == 'unknown' or card_value <= 0:
+                        logger.info(f'⏭️ 跳过无效卡: {card_type}@{card_value}')
+                        continue
+                    # 模板与OCR类型校验
+                    expected = self._rank_type(target)
+                    if card_type != expected:
+                        logger.info(f'⏭️ 模板/OCR类型不匹配: 模板:{expected} OCR:{card_type}，跳过')
+                        continue
+                    # 跳过已失败的结界卡
+                    key = (card_type, card_value, friend.name)
+                    if key in self.failed_cards:
+                        logger.info(f'⏭️ 探索跳过已失败卡: {card_type}@{card_value} ({friend.name})')
+                        continue
+
+                    rank = self._card_rank(target)
+                    attr = record_attr_map.get(card_type)
+                    if attr and card_value > getattr(self, attr, 0):
+                        setattr(self, attr, card_value)
+                    if best_rank is None or rank < best_rank or (rank == best_rank and card_value > best_value):
+                        best_rank, best_value = rank, card_value
+                        logger.info(f'📈 更新最佳卡 | 排名:{rank} 类型:{card_type} 数值:{card_value} 来源:{friend}')
+
                 self.perform_swipe_action()
-                continue
-
-            miss_count = 0
-            for target, _, area in cards:
-                # 点击结界卡获取详情
-                self.C_SELECT_CARD.roi_front = area
-                self.click(self.C_SELECT_CARD)
-                time.sleep(2)
-
-                # 解析结界卡类型和数值
-                card_type, card_value = self.check_card_num()
-
-                # 跳过无效结界卡
-                if card_type == 'unknown' or card_value <= 0:
-                    logger.info(f'⏭️ 跳过无效卡: {card_type}@{card_value}')
-                    continue
-                # 模板与OCR类型校验
-                expected = self._rank_type(target)
-                if card_type != expected:
-                    logger.info(f'⏭️ 模板/OCR类型不匹配: 模板:{expected} OCR:{card_type}，跳过')
-                    continue
-
-                rank = self._card_rank(target)
-                attr = record_attr_map.get(card_type)
-                if attr and card_value > getattr(self, attr, 0):
-                    setattr(self, attr, card_value)
-                if best_rank is None or rank < best_rank or (rank == best_rank and card_value > best_value):
-                    best_rank, best_value = rank, card_value
-                    logger.info(f'📈 更新最佳卡 | 排名:{rank} 类型:{card_type} 数值:{card_value}')
-
-            self.perform_swipe_action()
 
         if best_rank is None:
             logger.warning('❌ 未找到任何合适的结界卡')
@@ -677,53 +741,56 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         return best_rank, best_value
 
     def _confirm_select(self, best_rank):
-        """确认模式：扫描好友列表选择排名不劣于 best_rank 的结界卡并蹭卡
+        """确认模式：合并扫描同服与跨服好友列表，选择排名不劣于 best_rank 的结界卡并蹭卡
         :param best_rank: 探索得到的最佳排名
         :return: 选择成功返回 True
         """
         MAX_SWIPES = 20
-        CONSEC_MISS = 3
         TIMEOUT = 120
-        logger.info(f'启动确认模式 | 目标排名: {best_rank}')
-        timer = Timer(TIMEOUT).start()
-        miss_count = 0
+        logger.info(f'启动确认模式（合并同服+跨服好友列表） | 目标排名: {best_rank}')
 
-        for swipe_count in range(MAX_SWIPES + 1):
-            if timer.reached():
-                logger.warning('⏰ 操作超时，终止确认')
-                return False
-            self.screenshot()
-            cards = self.order_targets.find_everyone(self.device.image)
+        for friend in (SelectFriendList.SAME_SERVER, SelectFriendList.DIFFERENT_SERVER):
+            self.switch_friend_list(friend)
+            timer = Timer(TIMEOUT).start()
+            for swipe_count in range(MAX_SWIPES + 1):
+                if timer.reached():
+                    logger.warning('⏰ 操作超时，终止确认')
+                    break
+                self.screenshot()
+                cards = self.order_targets.find_everyone(self.device.image)
 
-            if not cards:
-                miss_count += 1
-                if miss_count > CONSEC_MISS:
-                    logger.warning(f'⚠️ 连续{miss_count}次 | 未检测到结界卡, 终止确认')
-                    return False
+                # 未检测到结界卡则立即停止滑动
+                if not cards:
+                    logger.warning(f'⚠️ [{friend}] 未检测到结界卡，停止滑动')
+                    break
+
+                for target, _, area in cards:
+                    self.C_SELECT_CARD.roi_front = area
+                    self.click(self.C_SELECT_CARD)
+                    self.device.click_record_clear()
+                    time.sleep(2)
+                    card_type, card_value = self.check_card_num()
+
+                    if card_type == 'unknown' or card_value <= 0:
+                        continue
+                    expected = self._rank_type(target)
+                    if card_type != expected:
+                        continue
+                    # 跳过已失败的结界卡
+                    key = (card_type, card_value, friend.name)
+                    if key in self.failed_cards:
+                        logger.info(f'⏭️ 确认跳过已失败卡: {card_type}@{card_value} ({friend.name})')
+                        continue
+                    rank = self._card_rank(target)
+                    if rank <= best_rank:
+                        self._selected_card = key
+                        logger.info(f'🎉 确认蹭卡 | 来源:{friend} 排名:{rank} 类型:{card_type} 数值:{card_value}')
+                        self.save_image(push_flag=False, wait_time=0, content=f'🎉 确认蹭卡（{card_type}: {card_value}）')
+                        return True
+
                 self.perform_swipe_action()
-                continue
 
-            miss_count = 0
-            for target, _, area in cards:
-                self.C_SELECT_CARD.roi_front = area
-                self.click(self.C_SELECT_CARD)
-                time.sleep(2)
-                card_type, card_value = self.check_card_num()
-
-                if card_type == 'unknown' or card_value <= 0:
-                    continue
-                expected = self._rank_type(target)
-                if card_type != expected:
-                    continue
-                rank = self._card_rank(target)
-                if rank <= best_rank:
-                    logger.info(f'🎉 确认蹭卡: 排名:{rank} 类型:{card_type} 数值:{card_value}')
-                    self.save_image(push_flag=False, wait_time=0, content=f'🎉 确认蹭卡（{card_type}: {card_value}）')
-                    return True
-
-            self.perform_swipe_action()
-
-        logger.warning('⚠️ 已达到最大滑动次数, 终止确认')
+        logger.warning('⚠️ 同服与跨服均已达到最大滑动次数, 终止确认')
         return False
 
 

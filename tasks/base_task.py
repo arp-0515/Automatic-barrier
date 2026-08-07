@@ -826,4 +826,30 @@ class BaseTask(GlobalGameAssets, CostumeBase):
         logger.info(f'Push notify: {content}')
 
     def save_image(self, task_name=None, content=None, wait_time=2, image_type=False, push_flag=False, level=3):
-        logger.info(f'Save image: {task_name}')
+        """
+        保存当前截屏到 ./log/screenshots/ 以便排查问题
+        :param task_name: 任务名/文件名前缀
+        :param content: 保存原因描述（会写入文件名）
+        :param wait_time: 保存前等待的秒数（可选）
+        :return:
+        """
+        try:
+            import re
+            from pathlib import Path
+            from module.base.utils import save_image as _save_image
+
+            if wait_time > 0:
+                sleep(wait_time)
+            if getattr(self.device, 'image', None) is None:
+                logger.warning('Save image failed: no screenshot available')
+                return
+
+            folder = Path('./log/screenshots')
+            folder.mkdir(parents=True, exist_ok=True)
+            tag = '_'.join([str(x) for x in (task_name, content) if x])
+            tag = re.sub(r'[\\/:*?"<>|\r\n]', '_', tag)[:120]
+            file = folder / f'{int(time() * 1000)}_{tag}.png'
+            _save_image(self.device.image, str(file.resolve()))
+            logger.info(f'Save image: {file.name}')
+        except Exception as e:
+            logger.warning(f'Save image failed: {e}')
