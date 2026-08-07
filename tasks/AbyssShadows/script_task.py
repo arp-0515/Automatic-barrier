@@ -542,22 +542,51 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
                     break
             logger.info("Combat time ended, proceeding to exit.")
             self.device.stuck_record_clear()
-        # 战斗提前结束这时没有返回按钮
-        if self.appear_then_click(self.I_WIN, interval=1.5):
-            return True
-
-        # 点击返回
+        # 智能伤害限时战斗提前退出需两步：1.点击返回键 2.点击屏幕中心确认框的"确认"
+        # 阶段一：点击返回键，直到确认框出现（或已回到战报）
+        exit_timer = Timer(10)
+        exit_timer.start()
         while 1:
             self.screenshot()
-            if self.appear_then_click(self.I_EXIT, interval=2):
-                continue
-            if self.appear_then_click(self.I_EXIT_ENSURE, interval=2):
-                continue
-            if self.appear_then_click(self.I_WIN, interval=2):
-                continue
             if self.appear(self.I_ABYSS_NAVIGATION):
+                logger.info("Back to abyss map")
                 break
-        logger.info(f"Click {self.I_EXIT_ENSURE.name}")
+            if self.appear(self.I_ABYSS_EXIT_CONFIRM) or self.appear(self.I_EXIT_ENSURE):
+                logger.info("Exit confirm dialog appeared")
+                break
+            # 战斗提前结束这时没有返回按钮
+            if self.appear_then_click(self.I_WIN, interval=1.5):
+                logger.info("Battle ended early, clicked win")
+                return True
+            if self.appear_then_click(self.I_EXIT, interval=2):
+                logger.info(f"Click {self.I_EXIT.name}")
+                continue
+            if exit_timer.reached():
+                logger.warning("Exit timeout, force proceed")
+                break
+
+        # 阶段二：点击确认，直到回到战报
+        confirm_timer = Timer(10)
+        confirm_timer.start()
+        while 1:
+            self.screenshot()
+            if self.appear(self.I_ABYSS_NAVIGATION):
+                logger.info("Back to abyss map")
+                break
+            # 确认退出后会出现战报页面，点击战报退出按钮关闭
+            if self.appear(self.I_ABYSS_MAP):
+                if self.appear_then_click(self.I_ABYSS_MAP_EXIT, interval=1.5):
+                    logger.info(f"Click {self.I_ABYSS_MAP_EXIT.name}")
+                    continue
+            if self.appear_then_click(self.I_ABYSS_EXIT_CONFIRM, interval=1.5):
+                logger.info(f"Click {self.I_ABYSS_EXIT_CONFIRM.name}")
+                continue
+            if self.appear_then_click(self.I_EXIT_ENSURE, interval=1.5):
+                logger.info(f"Click {self.I_EXIT_ENSURE.name}")
+                continue
+            if confirm_timer.reached():
+                logger.warning("Confirm exit timeout")
+                break
 
         return True
 
