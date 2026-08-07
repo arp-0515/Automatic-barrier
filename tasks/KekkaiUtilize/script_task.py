@@ -470,16 +470,31 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
             return
         wait_timer = Timer(20)
         wait_timer.start()
+        realm_view_timer = Timer(2.0, count=2)
+        no_free_slot = False
         while 1:
             self.screenshot()
             # 有空位：点进入结界后直接弹出式神放置面板（人间烟火气的结界/可放置式神寄养）
             if self.appear(self.I_U_REALM_PICKER):
                 logger.info('Appear shikigami picker (friend realm has free slot)')
+                no_free_slot = False
                 break
             # 无坑位：进入好友结界视图（结界防守/式神育成/结界卡）
             if self.appear(self.I_SHI_CARD) or self.appear(self.I_SHI_DEFENSE):
                 logger.info('Appear friend realm view (no free slot)')
+                no_free_slot = True
                 break
+            # 无坑位：好友结界"式神育成"页（识别顶部标签区）。持续出现才判定，避免误判
+            if self.appear(self.I_U_REALM_VIEW):
+                if realm_view_timer.started():
+                    if realm_view_timer.reached():
+                        logger.info('Appear friend realm view (no free slot)')
+                        no_free_slot = True
+                        break
+                else:
+                    realm_view_timer.start()
+            else:
+                realm_view_timer.clear()
             # 还在借卡界面/加载中，继续点击进入结界
             if self.appear_then_click(self.I_CHECK_FRIEND_REALM_2, interval=1.5):
                 logger.info('Click too fast to enter the friend\'s realm pool')
@@ -495,7 +510,7 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
                 return
 
         # 无坑位（好友结界已满）
-        if self.appear(self.I_SHI_CARD) or self.appear(self.I_SHI_DEFENSE):
+        if no_free_slot:
             self.save_image(content='没有坑位了', wait_time=0, push_flag=False, image_type='png')
             logger.warning('没有坑位可能是其他人的手速太快了抢占了')
             return True

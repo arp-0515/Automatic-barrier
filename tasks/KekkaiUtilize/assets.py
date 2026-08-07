@@ -120,6 +120,9 @@ class KekkaiUtilizeAssets:
 	I_U_REALM_PICKER = RuleImage(roi_front=(859,21,158,24), roi_back=(800,10,430,50), threshold=0.7, method="Template matching", file="./tasks/KekkaiUtilize/utilize/utilize_u_realm_picker.png")
 	# 放置面板确认框标题"确认寄养所选式神？" 
 	I_U_REALM_CONFIRM = RuleImage(roi_front=(527,149,225,27), roi_back=(500,130,300,60), threshold=0.7, method="Template matching", file="./tasks/KekkaiUtilize/utilize/utilize_u_realm_confirm.png")
+	# 好友结界"式神育成"页（顶部标签区）。无坑位时进入好友结界停在式神育成页；
+	# 有坑位时该页会带"可放置式神寄养"按钮（由 I_U_REALM_PICKER 判断，须先于本项检查）
+	I_U_REALM_VIEW = RuleImage(roi_front=(60,15,180,160), roi_back=(40,5,220,180), threshold=0.7, method="Template matching", file="./tasks/KekkaiUtilize/utilize/utilize_u_realm_view.png")
 
 
 	# Click Rule Assets
