@@ -367,6 +367,25 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         logger.info('Enter utilize')
         return True
 
+    def _ensure_on_friend_list(self):
+        """
+        确保当前在好友列表界面（同服/跨服标签可见）。
+        如果卡在好友结界内部（式神育成等），按返回键退出到好友列表。
+        """
+        for _ in range(10):
+            self.screenshot()
+            if self.appear(self.I_UTILIZE_FRIEND_GROUP) or self.appear(self.I_UTILIZE_ZONES_GROUP):
+                return
+            if self.appear(self.I_U_REALM_VIEW) or self.appear(self.I_SHI_CARD) or self.appear(self.I_SHI_DEFENSE):
+                logger.warning('Not on friend list, inside friend realm, pressing back')
+                self.appear_then_click(self.I_UI_BACK_RED, interval=1)
+                self.appear_then_click(self.I_UI_BACK_BLUE, interval=1)
+                time.sleep(1)
+                continue
+            self.appear_then_click(self.I_UI_BACK_RED, interval=1)
+            self.appear_then_click(self.I_UI_BACK_BLUE, interval=1)
+            time.sleep(0.5)
+
     def switch_friend_list(self, friend: SelectFriendList = SelectFriendList.SAME_SERVER) -> bool:
         """
         切换不同的服务区
@@ -374,6 +393,7 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         :return:
         """
         logger.info('Switch friend list to %s', friend)
+        self._ensure_on_friend_list()
         if friend == SelectFriendList.SAME_SERVER:
             check_image = self.I_UTILIZE_FRIEND_GROUP
         else:
@@ -465,37 +485,18 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
         # 进入结界
         if not self.appear(self.I_U_ENTER_REALM):
             logger.warning('Cannot find enter realm button')
-            # 可能是滑动的时候出错
             logger.warning('The best reason is that the swipe is wrong')
             return
         wait_timer = Timer(20)
         wait_timer.start()
-        realm_view_timer = Timer(2.0, count=2)
-        no_free_slot = False
         while 1:
             self.screenshot()
-            # 有空位：点进入结界后直接弹出式神放置面板（人间烟火气的结界/可放置式神寄养）
-            if self.appear(self.I_U_REALM_PICKER):
-                logger.info('Appear shikigami picker (friend realm has free slot)')
-                no_free_slot = False
+            # 已进入结界（检测到任意结界内元素）→ 直接尝试放置
+            if self.appear(self.I_U_REALM_PICKER) or self.appear(self.I_SHI_CARD) or \
+               self.appear(self.I_SHI_DEFENSE) or self.appear(self.I_U_REALM_VIEW):
+                logger.info('Entered friend realm, attempt to place shikigami')
                 break
-            # 无坑位：进入好友结界视图（结界防守/式神育成/结界卡）
-            if self.appear(self.I_SHI_CARD) or self.appear(self.I_SHI_DEFENSE):
-                logger.info('Appear friend realm view (no free slot)')
-                no_free_slot = True
-                break
-            # 无坑位：好友结界"式神育成"页（识别顶部标签区）。持续出现才判定，避免误判
-            if self.appear(self.I_U_REALM_VIEW):
-                if realm_view_timer.started():
-                    if realm_view_timer.reached():
-                        logger.info('Appear friend realm view (no free slot)')
-                        no_free_slot = True
-                        break
-                else:
-                    realm_view_timer.start()
-            else:
-                realm_view_timer.clear()
-            # 还在借卡界面/加载中，继续点击进入结界
+            # 还在加载中，继续点击进入结界
             if self.appear_then_click(self.I_CHECK_FRIEND_REALM_2, interval=1.5):
                 logger.info('Click too fast to enter the friend\'s realm pool')
                 continue
@@ -503,21 +504,17 @@ class ScriptTask(GameUi, ReplaceShikigami, KekkaiUtilizeAssets):
                 time.sleep(0.5)
                 continue
             if wait_timer.reached():
-                # 超时未检测到放置面板/好友结界视图：标记该卡失败，回退重选下一张
                 self.save_image(wait_time=0, push_flag=False, content='进入好友结界超时', image_type='png')
                 logger.warning('Appear friend realm timeout, mark card failed and retry next card')
                 self._mark_card_failed('进入结界超时')
                 return
 
-        # 无坑位（好友结界已满）
-        if no_free_slot:
-            self.save_image(content='没有坑位了', wait_time=0, push_flag=False, image_type='png')
-            logger.warning('没有坑位可能是其他人的手速太快了抢占了')
+        # 直接尝试放置式神，不预判坑位
+        if self._place_shikigami_in_picker(shikigami_order):
             return True
-
-        logger.info('Enter friend realm, place shikigami')
-        # 在好友结界的式神放置面板中选择并放入式神
-        return self._place_shikigami_in_picker(shikigami_order)
+        # 放置超时 → 没坑位
+        self._mark_card_failed('没有坑位')
+        return True
 
     def _place_shikigami_in_picker(self, shikigami_order: int = 7) -> bool:
         """
