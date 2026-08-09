@@ -125,44 +125,36 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
         self.wait_until_disappear(self.I_WAIT_TO_START)
         self.device.stuck_record_clear()
 
-        # 未开启智能伤害：每个区域按上限打完（3ELITE→2GENERAL→1BOSS），然后切区域
+        # 未开启智能伤害：每个区域按顺序打完（精英1→精英2→精英3→副将1→副将2→boss1），然后切区域
         if not cfg.abyss_shadows_combat_time.CombatTime_enable:
-            AREA_MAX = {EmemyType.ELITE: 3, EmemyType.GENERAL: 2, EmemyType.BOSS: 1}
             TOTAL_MAX = {EmemyType.ELITE: 6, EmemyType.GENERAL: 4, EmemyType.BOSS: 2}
-            area_count = {t: 0 for t in AREA_MAX}
             areas = [AreaType.DRAGON, AreaType.PEACOCK, AreaType.FOX, AreaType.LEOPARD]
-            area_index = 0
 
-            while area_index < len(areas):
-                area = areas[area_index]
+            # 每个区域的进攻顺序：3精英→2副将→1boss
+            area_fight_sequence = [
+                EmemyType.ELITE, EmemyType.ELITE, EmemyType.ELITE,
+                EmemyType.GENERAL, EmemyType.GENERAL,
+                EmemyType.BOSS
+            ]
+
+            for area in areas:
                 current_area = self.check_current_area()
                 if current_area != area:
                     self.change_area(area)
                 self.appear_then_click(self.I_ABYSS_MAP_EXIT, interval=1)
-                logger.info(f"Area {area.name}: elite {area_count[EmemyType.ELITE]}/{AREA_MAX[EmemyType.ELITE]} "
-                            f"general {area_count[EmemyType.GENERAL]}/{AREA_MAX[EmemyType.GENERAL]} "
-                            f"boss {area_count[EmemyType.BOSS]}/{AREA_MAX[EmemyType.BOSS]}")
+                logger.info(f"Area {area.name}: elite {self.elite_fight_count}/{TOTAL_MAX[EmemyType.ELITE]} "
+                            f"general {self.general_fight_count}/{TOTAL_MAX[EmemyType.GENERAL]} "
+                            f"boss {self.boss_fight_count}/{TOTAL_MAX[EmemyType.BOSS]}")
 
-                # 按上限在本区域打完三种敌人（3ELITE→2GENERAL→1BOSS）
-                for enemy_type in [EmemyType.ELITE, EmemyType.GENERAL, EmemyType.BOSS]:
-                    while area_count[enemy_type] < AREA_MAX[enemy_type]:
-                        total = (self.elite_fight_count if enemy_type == EmemyType.ELITE
-                                 else self.general_fight_count if enemy_type == EmemyType.GENERAL
-                                 else self.boss_fight_count)
-                        if total >= TOTAL_MAX[enemy_type]:
-                            break
-                        if not self.find_enemy(enemy_type):
-                            break
-                        area_count[enemy_type] += 1
-                        if enemy_type == EmemyType.ELITE:
-                            self.elite_fight_count += 1
-                        elif enemy_type == EmemyType.GENERAL:
-                            self.general_fight_count += 1
-                        elif enemy_type == EmemyType.BOSS:
-                            self.boss_fight_count += 1
-                        logger.info(f"boss {self.boss_fight_count}/{TOTAL_MAX[EmemyType.BOSS]} "
-                                    f"general {self.general_fight_count}/{TOTAL_MAX[EmemyType.GENERAL]} "
-                                    f"elite {self.elite_fight_count}/{TOTAL_MAX[EmemyType.ELITE]}")
+                # 按顺序进攻
+                for enemy_type in area_fight_sequence:
+                    # 检查总数是否已达标
+                    total = (self.elite_fight_count if enemy_type == EmemyType.ELITE
+                             else self.general_fight_count if enemy_type == EmemyType.GENERAL
+                             else self.boss_fight_count)
+                    if total >= TOTAL_MAX[enemy_type]:
+                        continue
+                    self.find_enemy(enemy_type)
 
                 # 全部达标 → 完成
                 if self.boss_fight_count >= TOTAL_MAX[EmemyType.BOSS] and \
@@ -171,9 +163,6 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
                     logger.info("All fights completed")
                     success = True
                     break
-
-                area_index += 1
-                area_count = {t: 0 for t in AREA_MAX}
 
             # 四个区域跑完仍未满 → 兜底
             if success is not True:
@@ -188,46 +177,37 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
                             f"elite {self.elite_fight_count}/{TOTAL_MAX[EmemyType.ELITE]}")
                 success = True
 
-        # 开启智能伤害：每个区域按上限打完（3ELITE→2GENERAL→1BOSS），然后切区域
-        # 单区域上限：ELITE 3、GENERAL 2、BOSS 1
+        # 开启智能伤害：每个区域按顺序打完（精英1→精英2→精英3→副将1→副将2→boss1），然后切区域
         # 总目标：ELITE 6、GENERAL 4、BOSS 2
-        AREA_MAX = {EmemyType.ELITE: 3, EmemyType.GENERAL: 2, EmemyType.BOSS: 1}
         TOTAL_MAX = {EmemyType.ELITE: 6, EmemyType.GENERAL: 4, EmemyType.BOSS: 2}
         if cfg.abyss_shadows_combat_time.CombatTime_enable:
-            area_count = {t: 0 for t in AREA_MAX}
             areas = [AreaType.DRAGON, AreaType.PEACOCK, AreaType.FOX, AreaType.LEOPARD]
-            area_index = 0
 
-            while area_index < len(areas):
-                area = areas[area_index]
+            # 每个区域的进攻顺序：3精英→2副将→1boss
+            area_fight_sequence = [
+                EmemyType.ELITE, EmemyType.ELITE, EmemyType.ELITE,
+                EmemyType.GENERAL, EmemyType.GENERAL,
+                EmemyType.BOSS
+            ]
+
+            for area in areas:
                 current_area = self.check_current_area()
                 if current_area != area:
                     self.change_area(area)
                 self.appear_then_click(self.I_ABYSS_MAP_EXIT, interval=1)
-                logger.info(f"Area {area.name}: elite {area_count[EmemyType.ELITE]}/{AREA_MAX[EmemyType.ELITE]} "
-                            f"general {area_count[EmemyType.GENERAL]}/{AREA_MAX[EmemyType.GENERAL]} "
-                            f"boss {area_count[EmemyType.BOSS]}/{AREA_MAX[EmemyType.BOSS]}")
+                logger.info(f"Area {area.name}: elite {self.elite_fight_count}/{TOTAL_MAX[EmemyType.ELITE]} "
+                            f"general {self.general_fight_count}/{TOTAL_MAX[EmemyType.GENERAL]} "
+                            f"boss {self.boss_fight_count}/{TOTAL_MAX[EmemyType.BOSS]}")
 
-                # 按上限在本区域打完三种敌人（3ELITE→2GENERAL→1BOSS）
-                for enemy_type in [EmemyType.ELITE, EmemyType.GENERAL, EmemyType.BOSS]:
-                    while area_count[enemy_type] < AREA_MAX[enemy_type]:
-                        total = (self.elite_fight_count if enemy_type == EmemyType.ELITE
-                                 else self.general_fight_count if enemy_type == EmemyType.GENERAL
-                                 else self.boss_fight_count)
-                        if total >= TOTAL_MAX[enemy_type]:
-                            break
-                        if not self.find_enemy(enemy_type):
-                            break
-                        area_count[enemy_type] += 1
-                        if enemy_type == EmemyType.ELITE:
-                            self.elite_fight_count += 1
-                        elif enemy_type == EmemyType.GENERAL:
-                            self.general_fight_count += 1
-                        elif enemy_type == EmemyType.BOSS:
-                            self.boss_fight_count += 1
-                        logger.info(f"boss {self.boss_fight_count}/{TOTAL_MAX[EmemyType.BOSS]} "
-                                    f"general {self.general_fight_count}/{TOTAL_MAX[EmemyType.GENERAL]} "
-                                    f"elite {self.elite_fight_count}/{TOTAL_MAX[EmemyType.ELITE]}")
+                # 按顺序进攻
+                for enemy_type in area_fight_sequence:
+                    # 检查总数是否已达标
+                    total = (self.elite_fight_count if enemy_type == EmemyType.ELITE
+                             else self.general_fight_count if enemy_type == EmemyType.GENERAL
+                             else self.boss_fight_count)
+                    if total >= TOTAL_MAX[enemy_type]:
+                        continue
+                    self.find_enemy(enemy_type)
 
                 # 全部达标 → 完成
                 if self.boss_fight_count >= TOTAL_MAX[EmemyType.BOSS] and \
@@ -236,9 +216,6 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
                     logger.info("All fights completed")
                     success = True
                     break
-
-                area_index += 1
-                area_count = {t: 0 for t in AREA_MAX}
 
             # 四个区域跑完仍未满 → 兜底
             if success is not True:
@@ -464,17 +441,26 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
         :return 
         '''
         general_list = [CilckArea.GENERAL_1, CilckArea.GENERAL_2]
-        logger.info(f"Run general fight") 
-        for general in general_list:
-            # 副将战斗次数达到4个时，退出循环
-            if self.general_fight_count >= 4:
-                logger.info(f"general fight count {self.general_fight_count} times, skip")
-                break
-            if self.click_emeny_area(general):
-                logger.info(f"Click {general.name}")
-                self.general_fight_count += 1
-                self.run_general_battle_back(Monster_type="GENERAL")
-                logger.info(f'Fight, general_fight_count {self.general_fight_count} times')
+        logger.info(f"Run general fight, general_fight_count={self.general_fight_count}")
+        
+        # 副将战斗次数达到4个时，跳过
+        if self.general_fight_count >= 4:
+            logger.info(f"general fight count {self.general_fight_count} times, skip")
+            return True
+        
+        # 根据当前次数选择对应副将（0→GENERAL_1, 1→GENERAL_2）
+        general_index = self.general_fight_count % 2
+        general = general_list[general_index]
+        
+        if self.click_emeny_area(general):
+            logger.info(f"Click {general.name}")
+            self.general_fight_count += 1
+            self.run_general_battle_back(Monster_type="GENERAL")
+            logger.info(f'Fight, general_fight_count {self.general_fight_count} times')
+        else:
+            # 怪物已被击败，跳过该位置
+            logger.info(f"General {general.name} already defeated, skip")
+            self.general_fight_count += 1
         return True
 
 
@@ -483,24 +469,31 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
         :return 
         '''
         elite_list = [CilckArea.ELITE_1, CilckArea.ELITE_2, CilckArea.ELITE_3]
-        logger.info(f"Run elite fight")  
-        for elite in elite_list:
-            # 精英战斗次数达到6个时，退出循环
-            if self.elite_fight_count >= 6:
-                logger.info(f"Elite fight count {self.elite_fight_count} times, skip")
-                break
-            if self.click_emeny_area(elite):
-                logger.info(f"Click {elite.name}")
-                self.elite_fight_count += 1
-                self.run_general_battle_back(Monster_type="ELITE")
-                logger.info(f'Fight, elite_fight_count {self.elite_fight_count} times')
+        logger.info(f"Run elite fight, elite_fight_count={self.elite_fight_count}")
+        
+        # 精英战斗次数达到6个时，跳过
+        if self.elite_fight_count >= 6:
+            logger.info(f"Elite fight count {self.elite_fight_count} times, skip")
+            return True
+        
+        # 根据当前次数选择对应精英（0→ELITE_1, 1→ELITE_2, 2→ELITE_3）
+        elite_index = self.elite_fight_count % 3
+        elite = elite_list[elite_index]
+        
+        if self.click_emeny_area(elite):
+            logger.info(f"Click {elite.name}")
+            self.run_general_battle_back(Monster_type="ELITE")
+            self.elite_fight_count += 1
+            logger.info(f'Fight, elite_fight_count {self.elite_fight_count} times')
+        else:
+            # 怪物已被击败，跳过该位置
+            logger.info(f"Elite {elite.name} already defeated, skip")
+            self.elite_fight_count += 1
         return True
 
     def click_emeny_area(self, click_area: CilckArea) -> bool:
-        suceess = True
         ''' 点击敌人区域
-        
-        :return 
+        :return True 成功进入战斗, False 怪物已被击败
         '''
         logger.info(f"Click emeny area: {click_area.name}")
         # 点击战报
@@ -511,48 +504,50 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
                 continue
             if self.appear(self.I_ABYSS_MAP):
                 logger.info("Find abyss map, exit")
-            
-            click_times = 0
-            # 点击攻打区域
-            while 1:
-                self.screenshot()
-                # 如果点3次还没进去就表示目标已死亡,跳过
-                if click_times >= 3:
-                    logger.warning(f"Failed to click {click_area}")
-                    return
-                # 出现前往按钮就退出
-                if self.appear(self.I_ABYSS_GOTO_ENEMY):
-                    break
-                if self.click(click_area,interval=1.5):
-                    click_times += 1
-                    continue
-                if self.appear_then_click(self.I_ENSURE_BUTTON,interval=1):
-                    continue
-        
-            # 点击前往按钮
-            while 1:
-                self.screenshot()
-                if self.appear_then_click(self.I_ABYSS_GOTO_ENEMY,interval=1):
-                    logger.info(f"Click {self.I_ABYSS_GOTO_ENEMY.name}")
-                    # 点击敌人后，如果是不同区域会确认框，点击确认                
-                    if self.appear_then_click(self.I_ENSURE_BUTTON, interval=1):
-                        logger.info(f"Click {self.I_ENSURE_BUTTON.name}")
-                    # 跑动画比较花时间
-                    sleep(3)
-                    continue
-                else:
-                    break
-            
-            # 如果遇到点击前往按钮后不动的 bug，则再次尝试进入
-            if self.wait_until_appear(self.I_ABYSS_FIRE, wait_time=20):
                 break
+
+        click_times = 0
+        # 点击攻打区域
+        while 1:
+            self.screenshot()
+            # 如果点3次还没进去就表示目标已死亡,跳过
+            if click_times >= 3:
+                logger.warning(f"Failed to click {click_area}, monster may be defeated")
+                return False
+            # 出现前往按钮就退出
+            if self.appear(self.I_ABYSS_GOTO_ENEMY):
+                break
+            if self.click(click_area, interval=1.5):
+                click_times += 1
+                continue
+            if self.appear_then_click(self.I_ENSURE_BUTTON, interval=1):
+                continue
+        
+        # 点击前往按钮
+        while 1:
+            self.screenshot()
+            if self.appear_then_click(self.I_ABYSS_GOTO_ENEMY, interval=1):
+                logger.info(f"Click {self.I_ABYSS_GOTO_ENEMY.name}")
+                # 点击敌人后，如果是不同区域会确认框，点击确认                
+                if self.appear_then_click(self.I_ENSURE_BUTTON, interval=1):
+                    logger.info(f"Click {self.I_ENSURE_BUTTON.name}")
+                # 跑动画比较花时间
+                sleep(3)
+                continue
+            else:
+                break
+        
+        # 如果遇到点击前往按钮后不动的 bug，则再次尝试进入
+        if self.wait_until_appear(self.I_ABYSS_FIRE, wait_time=20):
+            pass
+        else:
             logger.warning("Failed to enter fire")
+            return False
         
         # 点击战斗按钮
         while 1:
             self.screenshot()
-            if self.appear_then_click(self.I_ABYSS_FIRE,interval=1):
-                  
+            if self.appear_then_click(self.I_ABYSS_FIRE, interval=1):
                 logger.info(f"Click {self.I_ABYSS_FIRE.name}")        
                 # 挑战敌人后，如果是奖励次数上限，会出现确认框   
                 if self.appear_then_click(self.I_ENSURE_BUTTON, interval=1):
@@ -561,7 +556,7 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
             if self.appear(self.I_PREPARE_HIGHLIGHT):
                 break
             
-        return suceess
+        return True
 
     def run_general_battle_back(self, Monster_type: str) -> bool:
         """

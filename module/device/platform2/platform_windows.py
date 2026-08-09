@@ -297,7 +297,7 @@ class PlatformWindows(PlatformBase, EmulatorManager):
         logger.info(f'Current window: {current_window}')
 
         def adb_connect():
-            m = self.adb_client.connect(self.serial)
+            m = self.adb_client.connect(self.serial, timeout=30)
             if 'connected' in m:
                 # Connected to 127.0.0.1:59865
                 # Already connected to 127.0.0.1:59865
@@ -322,7 +322,7 @@ class PlatformWindows(PlatformBase, EmulatorManager):
             logger.info(f'Found azurlane packages: {m}')
 
         interval = Timer(1).start()
-        timeout = Timer(120).start()
+        timeout = Timer(30).start()
         struct_window = Timer(10)
         new_window = 0
         while 1:
