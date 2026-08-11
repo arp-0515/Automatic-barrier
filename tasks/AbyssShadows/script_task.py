@@ -19,6 +19,7 @@ from tasks.Component.config_base import ConfigBase, Time
 from tasks.GameUi.game_ui import GameUi
 from tasks.GameUi.page import page_main, page_kekkai_toppa, page_shikigami_records, page_guild
 from tasks.RealmRaid.assets import RealmRaidAssets
+from tasks.Restart.assets import RestartAssets
 
 from module.logger import logger
 from module.exception import TaskEnd
@@ -81,12 +82,78 @@ class CilckArea:
     __repr__ = __str__
 
 
-class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
+class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets, RestartAssets):
     
 
     boss_fight_count = 0  # 首领战斗次数
     general_fight_count = 0  # 副将战斗次数
     elite_fight_count = 0  # 精英战斗次数
+
+    def ensure_emulator_running(self):
+        """启动模拟器并等待游戏加载到主页面"""
+        # 1. 启动模拟器
+        logger.info('Starting emulator...')
+        self.device.emulator_start()
+
+        # 2. 等待模拟器就绪（截图成功）
+        logger.info('Waiting for emulator to be ready...')
+        for i in range(20):
+            time.sleep(2)
+            try:
+                self.screenshot()
+                logger.info(f'Emulator ready after {(i+1)*2}s')
+                break
+            except Exception:
+                continue
+
+        # 3. 启动游戏
+        logger.info('Starting game...')
+        self.device.app_start()
+
+        # 4. 进入游戏页面点击进入游戏
+        logger.info('Waiting for login page...')
+        timeout = Timer(60).start()
+        while not timeout.reached():
+            time.sleep(3)
+            try:
+                self.screenshot()
+                page = self.ui_get_current_page()
+                if page and page.name == 'page_main':
+                    logger.info('Game loaded to main page')
+                    return
+                elif page and page.name == 'page_login':
+                    logger.info('On login page, clicking enter game...')
+                    self._handle_login_page()
+            except Exception as e:
+                logger.warning(f'Error: {e}')
+                continue
+        logger.warning('Game load timeout, proceeding anyway')
+
+    def _handle_login_page(self):
+        """处理登录页面的各种情况"""
+        # 关闭红色关闭按钮
+        if self.appear_then_click(self.I_LOGIN_RED_CLOSE, interval=0.6):
+            logger.info('Close red close')
+            return
+        
+        # 关闭黄色关闭按钮
+        if self.appear_then_click(self.I_LOGIN_YELLOW_CLOSE, interval=0.6):
+            logger.info('Close yellow close')
+            return
+        
+        # 关闭阴阳师精灵提示
+        if self.appear_then_click(self.I_LOGIN_LOGIN_ONMYOJI_GENIE):
+            logger.info('Click onmyoji genie')
+            return
+        
+        # 点击进入游戏按钮
+        if self.ocr_appear_click(self.O_LOGIN_ENTER_GAME, interval=1):
+            logger.info('Clicked enter game button')
+            time.sleep(3)
+            return
+        
+        # 点击屏幕任意位置
+        self.click(x=640, y=400, interval=1)
     
     def run(self):
         """ 狭间暗域主函数
@@ -94,6 +161,9 @@ class ScriptTask(GeneralBattle, GameUi, SwitchSoul, AbyssShadowsAssets):
         :return:
         """
         cfg: AbyssShadows = self.config.abyss_shadows
+
+        # 启动模拟器并等待游戏加载
+        self.ensure_emulator_running()
 
         if cfg.switch_soul_config.enable:
             self.ui_get_current_page()
