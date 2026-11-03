@@ -3,6 +3,8 @@ import re
 import subprocess
 import psutil
 from adbutils import AdbDevice, AdbClient
+from filelock import FileLock, Timeout
+from pathlib import Path
 
 from deploy.utils import DataProcessInfo
 from module.base.decorator import run_once
@@ -14,6 +16,18 @@ from module.logger import logger
 
 import ctypes
 from ctypes import wintypes
+
+# Serialize MuMu manager commands across script instances (oas1/oas2/...)
+# so concurrent start/stop cannot race on MuMu's global player index.
+_MUMU_LOCK_PATH = Path.cwd() / 'log' / '.mumu_manager.lock'
+_MUMU_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+# Single shared lock object: reuses one OS handle, avoids same-process deadlock.
+_MUMU_LOCK = FileLock(str(_MUMU_LOCK_PATH))
+
+
+def _mumu_manager_lock(timeout: float = 180) -> FileLock:
+    _MUMU_LOCK.timeout = timeout
+    return _MUMU_LOCK
 
 
 class EmulatorUnknown(Exception):
@@ -113,12 +127,16 @@ class AdbDeviceWithStatus(AdbDevice):
     def __bool__(self):
         return True
 
+
 class PlatformWindows(PlatformBase, EmulatorManager):
     @classmethod
-    def execute(cls, command, show_window=True):
+    def execute(cls, command, show_window=True, wait=False, timeout=60):
         """
         Args:
             command (str):
+            show_window (bool):
+            wait (bool): Block until process exits
+            timeout (float): Seconds to wait when wait=True
 
         Returns:
             subprocess.Popen:
@@ -135,11 +153,22 @@ class PlatformWindows(PlatformBase, EmulatorManager):
 
         command = command.replace(r"\\", "/").replace("\\", "/").replace('"', '"')
         logger.info(f'Execute: {command}')
-        return subprocess.Popen(
+        process = subprocess.Popen(
         command,
         close_fds=True,
         startupinfo=startupinfo
         )
+        if wait:
+            try:
+                process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.communicate(timeout=5)
+                except Exception:
+                    pass
+                logger.warning(f'Execute timeout after {timeout}s: {command}')
+        return process
         #return subprocess.Popen(command, close_fds=True)  # only work on Windows
 
     @classmethod
@@ -177,10 +206,18 @@ class PlatformWindows(PlatformBase, EmulatorManager):
             # NemuPlayer.exe -m nemu-12.0-x64-default
             self.execute(f'"{exe}" -m {instance.name}', show_window=show_window)
         elif instance == Emulator.MuMuPlayer12:
-            # MuMuPlayer.exe -v 0
+            # MuMuManager.exe api -v 0 launch_player
             if instance.MuMuPlayer12_id is None:
-                logger.warning(f'Cannot get MuMu instance index from name {instance.name}')
-            self.execute(f'"{exe}" -v {instance.MuMuPlayer12_id}', show_window=show_window)
+                raise EmulatorUnknown(f'Cannot get MuMu instance index from name {instance.name}')
+            console = Emulator.single_to_console(exe)
+            # Use official manager API and wait for it to finish,
+            # fire-and-forget MuMuNxMain.exe races with shutdown_player.
+            self.execute(
+                f'"{console}" api -v {instance.MuMuPlayer12_id} launch_player',
+                show_window=show_window,
+                wait=True,
+                timeout=30,
+            )
         elif instance == Emulator.LDPlayerFamily:
             # ldconsole.exe launch --index 0
             self.execute(f'"{Emulator.single_to_console(exe)}" launch --index {instance.LDPlayer_id}', show_window=show_window)
@@ -235,8 +272,15 @@ class PlatformWindows(PlatformBase, EmulatorManager):
         elif instance == Emulator.MuMuPlayer12:
             # MuMuManager.exe api -v 1 shutdown_player
             if instance.MuMuPlayer12_id is None:
-                logger.warning(f'Cannot get MuMu instance index from name {instance.name}')
-            self.execute(f'"{Emulator.single_to_console(exe)}" api -v {instance.MuMuPlayer12_id} shutdown_player')
+                raise EmulatorUnknown(f'Cannot get MuMu instance index from name {instance.name}')
+            console = Emulator.single_to_console(exe)
+            self.execute(
+                f'"{console}" api -v {instance.MuMuPlayer12_id} shutdown_player',
+                wait=True,
+                timeout=30,
+            )
+            # Give MuMu a moment to fully release the instance/ADB port
+            Timer(2).wait()
         elif instance == Emulator.LDPlayerFamily:
             # ldconsole.exe quit --index 0
             self.execute(f'"{Emulator.single_to_console(exe)}" quit --index {instance.LDPlayer_id}')
@@ -293,11 +337,13 @@ class PlatformWindows(PlatformBase, EmulatorManager):
         """
         logger.hr('Emulator start', level=2)
         current_window = get_focused_window()
-        serial = self.emulator_instance.serial
-        logger.info(f'Current window: {current_window}')
+        serial = self.serial
+        logger.info(f'Current window: {current_window}, serial: {serial}')
 
         def adb_connect():
-            m = self.adb_client.connect(self.serial, timeout=30)
+            # Short timeout: this runs every second inside the wait loop.
+            # A 30s blocking connect would eat the whole startup budget.
+            m = self.adb_client.connect(self.serial, timeout=5)
             if 'connected' in m:
                 # Connected to 127.0.0.1:59865
                 # Already connected to 127.0.0.1:59865
@@ -322,14 +368,15 @@ class PlatformWindows(PlatformBase, EmulatorManager):
             logger.info(f'Found azurlane packages: {m}')
 
         interval = Timer(1).start()
-        timeout = Timer(30).start()
+        # Startup wait budget (user-facing remain[] countdown).
+        timeout = Timer(15).start()
         struct_window = Timer(10)
         new_window = 0
         while 1:
             interval.wait()
             interval.reset()
             if timeout.reached():
-                logger.warning(f'Emulator start timeout')
+                logger.warning(f'Emulator start timeout, remain 0.0s')
                 return False
 
             # Check emulator window showing up
@@ -351,8 +398,10 @@ class PlatformWindows(PlatformBase, EmulatorManager):
                     if device.status == 'device':
                         # Emulator online
                         pass
-                    if device.status == 'offline':
-                        self.adb_client.disconnect(serial)
+                    else:
+                        # offline / unauthorized / ...
+                        if device.status == 'offline':
+                            self.adb_client.disconnect(serial)
                         adb_connect()
                         continue
                 else:
@@ -360,8 +409,9 @@ class PlatformWindows(PlatformBase, EmulatorManager):
                     adb_connect()
                     continue
             except Exception as e:
+                # Keep retrying until timeout instead of aborting the whole watch.
                 logger.warning(f'Error during adb_connect in watch loop: {e}')
-                return False
+                continue
 
             show_online(devices.first_or_none())
 
@@ -417,43 +467,70 @@ class PlatformWindows(PlatformBase, EmulatorManager):
 
     def emulator_start(self):
         logger.hr('Emulator start', level=1)
-        for i in range(3):
-            # Stop
-            if not self._emulator_function_wrapper(self._emulator_stop):
-                return False
-            # Start
-            if self._emulator_function_wrapper(self._emulator_start):
-                # Success
-                if self.emulator_start_watch():
-                    return True
-                logger.attr(2 - i, f'Failed to connect or start, try again')
-                continue
-            else:
-                # Failed to start, stop and start again
-                if self._emulator_function_wrapper(self._emulator_stop):
+        # Cross-process lock: oas1/oas2 must not interleave MuMu start/stop.
+        try:
+            lock = _mumu_manager_lock(timeout=180)
+            lock.acquire()
+        except Timeout:
+            logger.warning('Another instance is controlling the emulator, waiting...')
+            lock = _mumu_manager_lock(timeout=300)
+            lock.acquire()
+        try:
+            for i in range(3):
+                # Stop
+                if not self._emulator_function_wrapper(self._emulator_stop):
+                    return False
+                # Start
+                if self._emulator_function_wrapper(self._emulator_start):
+                    # Success
+                    if self.emulator_start_watch():
+                        return True
+                    logger.attr(2 - i, f'Failed to connect or start, try again')
                     continue
                 else:
-                    return False
+                    # Failed to start, stop and start again
+                    if self._emulator_function_wrapper(self._emulator_stop):
+                        continue
+                    else:
+                        return False
 
-        logger.error('Failed to start emulator 3 times, stopped')
-        return False
+            logger.error('Failed to start emulator 3 times, stopped')
+            return False
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
     def emulator_stop(self):
         logger.hr('Emulator stop', level=1)
-        for _ in range(3):
-            # Stop
-            if self._emulator_function_wrapper(self._emulator_stop):
-                # Success
-                return True
-            else:
-                # Failed to stop, start and stop again
-                if self._emulator_function_wrapper(self._emulator_start):
-                    continue
+        try:
+            lock = _mumu_manager_lock(timeout=180)
+            lock.acquire()
+        except Timeout:
+            logger.warning('Another instance is controlling the emulator, waiting...')
+            lock = _mumu_manager_lock(timeout=300)
+            lock.acquire()
+        try:
+            for _ in range(3):
+                # Stop
+                if self._emulator_function_wrapper(self._emulator_stop):
+                    # Success
+                    return True
                 else:
-                    return False
+                    # Failed to stop, start and stop again
+                    if self._emulator_function_wrapper(self._emulator_start):
+                        continue
+                    else:
+                        return False
 
-        logger.error('Failed to stop emulator 3 times, stopped')
-        return False
+            logger.error('Failed to stop emulator 3 times, stopped')
+            return False
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

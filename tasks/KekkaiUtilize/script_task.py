@@ -5,6 +5,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import Optional
 from cached_property import cached_property
 from datetime import timedelta, datetime
 
@@ -156,22 +157,35 @@ class ScriptTask(GameUi, RestartAssets, ReplaceShikigami, KekkaiUtilizeAssets):
             self.realm_goto_grown()
             self.screenshot()
 
-            if not self.appear(self.I_UTILIZE_ADD):
-                remaining_time = self.O_UTILIZE_RES_TIME.ocr(self.device.image)
-                if not isinstance(remaining_time, timedelta):
-                    logger.warning('Ocr remaining time error')
-                logger.info(f'Utilize remaining time: {remaining_time}')
-                # 已经蹭上卡了，设置下次蹭卡时间  # 减少30秒
-                # remaining_time = remaining_time - timedelta(seconds=30)
-                if remaining_time and remaining_time > timedelta(0):
-                    next_time = datetime.now() + remaining_time
-                    self.set_next_run(task='KekkaiUtilize', target=next_time)
-                else:
+            has_empty_slot = self.detect_no_shikigami()
+            can_add = self.appear(self.I_UTILIZE_ADD)
+
+            # 坑位正在寄养：右上角没有“+”的放置入口，显示的是“我的寄养”的剩余时间。
+            # 这个判断必须放在“有空位强制蹭卡”之前，否则育成界面的空位会盖过寄养状态，
+            # 把“我的寄养”面板当空位反复强点，累积触发 GameTooManyClickError
+            if not can_add:
+                remaining_time = self.get_utilize_remaining_time()
+                if remaining_time is not None:
+                    if remaining_time > timedelta(0):
+                        next_time = datetime.now() + remaining_time
+                        logger.info(f'坑位正在寄养，剩余时间 {remaining_time}，结束本次任务')
+                        self.push_notify(content=f'结界坑位正在寄养，剩余 {remaining_time}，到点后再次执行寄养')
+                        self.set_next_run(task='KekkaiUtilize', target=next_time)
+                        return
                     logger.warning('Utilize remaining time is zero, use normal schedule')
                     self.set_next_run(task='KekkaiUtilize', finish=True, success=True)
-                return
+                    return
+                # 没有读到剩余时间（识别失败），退回原来的尝试流程
+                if has_empty_slot:
+                    logger.info('Empty slot detected, force utilize (ignore remaining time)')
+                else:
+                    logger.warning('Ocr remaining time empty (detect fail), try utilize anyway')
+
             if not self.grown_goto_utilize():
                 logger.info('Utilize failed, exit')
+                # 强点是脚本有意为之的固定点点击，清空记录避免多次尝试累积触发 GameTooManyClickError
+                self.device.click_record_clear()
+                continue
             # 开始执行寄养
             if self.run_utilize(con.select_friend_list, con.shikigami_class, con.shikigami_order):
                 # 退出寮结界
@@ -181,37 +195,40 @@ class ScriptTask(GameUi, RestartAssets, ReplaceShikigami, KekkaiUtilizeAssets):
             else:
                 self.back_realm()
 
+    def get_utilize_remaining_time(self, max_retry: int = 2) -> Optional[timedelta]:
+        """
+        读取育成界面右上角“我的寄养”的剩余寄养时间
+        :return: 识别到合法的时间返回 timedelta；没有识别到返回 None
+        """
+        for attempt in range(max_retry):
+            if attempt:
+                time.sleep(0.5)
+                self.screenshot()
+            raw_time = self.O_UTILIZE_RES_TIME.ocr_single(self.device.image)
+            if not raw_time:
+                logger.warning('Ocr utilize remaining time empty')
+                continue
+            # 只接受 HH:MM:SS 或 MM:SS，避免把旁边的数值（如经验）误判成剩余时间
+            match = re.search(r'(\d{1,2}):(\d{2}):(\d{2})', raw_time)
+            if match:
+                hour, minute, second = (int(group) for group in match.groups())
+                logger.info(f'Utilize remaining time: {hour}:{minute}:{second}')
+                return timedelta(hours=hour, minutes=minute, seconds=second)
+            match = re.search(r'(\d{1,2}):(\d{2})', raw_time)
+            if match:
+                minute, second = (int(group) for group in match.groups())
+                logger.info(f'Utilize remaining time: {minute}:{second}')
+                return timedelta(minutes=minute, seconds=second)
+            logger.warning(f'Ocr utilize remaining time invalid: {raw_time}')
+        return None
+
     def check_max_lv(self, shikigami_class: ShikigamiClass = ShikigamiClass.N):
         """
-        在结界界面，进入式神育成，检查是否有满级的，如果有就换下一个
+        已取消满级式神判定，直接返回
         退出的时候还是结界界面
         :return:
         """
-        self.realm_goto_grown()
-        if self.appear(self.I_RS_LEVEL_MAX):
-            # 存在满级的式神
-            logger.info('Exist max level shikigami and replace it')
-            self.unset_shikigami_max_lv()
-            self.switch_shikigami_class(shikigami_class)
-            self.set_shikigami(shikigami_order=7, stop_image=self.I_RS_NO_ADD)
-        else:
-            logger.info('No max level shikigami')
-        if self.detect_no_shikigami():
-            logger.warning('There are no any shikigami grow room')
-            self.switch_shikigami_class(shikigami_class)
-            self.set_shikigami(shikigami_order=7, stop_image=self.I_RS_NO_ADD)
-
-        # 回到结界界面
-        while 1:
-            self.screenshot()
-
-            if self.appear(self.I_REALM_SHIN) and self.appear_multi_scale(self.I_SHI_GROWN):
-                self.screenshot()
-                if not self.appear(self.I_REALM_SHIN):
-                    continue
-                break
-            if self.appear_then_click(self.I_UI_BACK_BLUE, interval=2.5):
-                continue
+        return
 
     def check_guild_ap_or_assets(self, ap_enable: bool = True, assets_enable: bool = True) -> bool:
         """
@@ -419,17 +436,43 @@ class ScriptTask(GameUi, RestartAssets, ReplaceShikigami, KekkaiUtilizeAssets):
         从式神育成界面到 蹭卡界面
         :return:
         """
-        self.screenshot()
-        if not self.appear(self.I_UTILIZE_ADD):
-            logger.warning('No utilize add')
-            return False
-
+        # 有空位时强制进入：即使 I_UTILIZE_ADD 未识别到，也尝试点击该区域
+        force = self.detect_no_shikigami()
+        overall = Timer(30).start()
+        force_timer = Timer(3).start()
+        # 模板一直匹配不到时的兜底点击，避免 OCR/识别失败后卡死在育成页
+        fallback_timer = Timer(5).start()
+        # 固定点盲点的次数上限，超过说明点错了位置（比如右上角是“我的寄养”而不是“+”）
+        # 不限制会累积点击触发 GameTooManyClickError
+        blind_click_count = 0
+        blind_click_max = 3
         while 1:
+            if overall.reached():
+                logger.warning('Enter utilize timeout')
+                return False
             self.screenshot()
 
             if self.appear(self.I_U_ENTER_REALM):
                 break
             if self.appear_then_click(self.I_UTILIZE_ADD, interval=2):
+                continue
+            if force and force_timer.reached_and_reset():
+                if blind_click_count >= blind_click_max:
+                    logger.warning('Reach blind click limit, exit utilize')
+                    return False
+                blind_click_count += 1
+                x, y = self.I_UTILIZE_ADD.coord()
+                self.device.click(x=x, y=y, control_name=self.I_UTILIZE_ADD.name)
+                logger.info('Force click utilize add area (empty slot)')
+                continue
+            if not force and fallback_timer.reached_and_reset():
+                if blind_click_count >= blind_click_max:
+                    logger.warning('Reach blind click limit, exit utilize')
+                    return False
+                blind_click_count += 1
+                x, y = self.I_UTILIZE_ADD.coord()
+                self.device.click(x=x, y=y, control_name=self.I_UTILIZE_ADD.name)
+                logger.info('Fallback click utilize add area (template not matched)')
                 continue
         logger.info('Enter utilize')
         return True
@@ -556,25 +599,40 @@ class ScriptTask(GameUi, RestartAssets, ReplaceShikigami, KekkaiUtilizeAssets):
             return
         wait_timer = Timer(20)
         wait_timer.start()
+        loading = False
+        reclick_timer = Timer(6).start()
         while 1:
             self.screenshot()
             # 已进入结界（检测到任意结界内元素）→ 直接尝试放置
             if self.appear(self.I_U_REALM_PICKER) or self.appear(self.I_SHI_CARD) or \
                self.appear(self.I_SHI_DEFENSE) or self.appear(self.I_U_REALM_VIEW):
                 logger.info('Entered friend realm, attempt to place shikigami')
+                time.sleep(3)
                 break
-            # 还在加载中，继续点击进入结界
+            if wait_timer.reached():
+                self.save_image(wait_time=0, push_flag=False, content='进入好友结界超时', image_type='png')
+                logger.warning('Appear friend realm timeout, retry next card')
+                self._mark_card_failed('进入结界超时')
+                return
+            # 已点击进入、页面加载中 → 只等待，不再点击进入结界
+            if loading:
+                if reclick_timer.reached() and self.appear(self.I_U_ENTER_REALM):
+                    logger.info('Enter realm button still visible, allow click again')
+                    loading = False
+                else:
+                    time.sleep(0.5)
+                    continue
+            # 还在列表页，点击进入结界
             if self.appear_then_click(self.I_CHECK_FRIEND_REALM_2, interval=1.5):
                 logger.info('Click too fast to enter the friend\'s realm pool')
+                loading = True
+                reclick_timer.reset()
                 continue
             if self.appear_then_click(self.I_U_ENTER_REALM, interval=2.5):
                 time.sleep(0.5)
+                loading = True
+                reclick_timer.reset()
                 continue
-            if wait_timer.reached():
-                self.save_image(wait_time=0, push_flag=False, content='进入好友结界超时', image_type='png')
-                logger.warning('Appear friend realm timeout, mark card failed and retry next card')
-                self._mark_card_failed('进入结界超时')
-                return
 
         # 直接尝试放置式神，不预判坑位
         if self._place_shikigami_in_picker(shikigami_order):
@@ -674,18 +732,16 @@ class ScriptTask(GameUi, RestartAssets, ReplaceShikigami, KekkaiUtilizeAssets):
             logger.warning(f'保存跳过卡列表失败: {e}')
 
     def _mark_card_failed(self, reason: str = ''):
-        """把当前选中的结界卡标记为失败并持久化, 之后的选择流程会自动跳过"""
+        """已取消标记失败卡: 仅输出日志, 不写入跳过列表, 该卡之后仍会被选择"""
         if self._selected_card is None:
-            logger.warning(f'未记录当前选中卡, 无法跳过. reason={reason}')
+            logger.info(f'取消标记失败卡: 未记录当前选中卡. reason={reason}')
             return
-        self.failed_cards.add(self._selected_card)
-        self._save_skip_cards(self.failed_cards)
         card_type, card_value, source = self._selected_card
-        logger.warning(f'⛔ 标记失败卡并跳过: {card_type}@{card_value} ({source}) 原因:{reason}')
+        logger.info(f'ℹ️ 取消标记失败卡: {card_type}@{card_value} ({source}) 原因:{reason}')
 
     def _select_optimal_resource_card(self):
         """智能选卡主逻辑：按寄养规则优先级（太鼓6>太鼓5>太鼓4>斗鱼6>斗鱼5>斗鱼4>太鼓3>斗鱼3>太阴6>太阴5>太阴4>太阴3>太阴2>太阴1）选择最佳结界卡"""
-        self.failed_cards = self._load_skip_cards()
+        self.failed_cards = set()
         self._selected_card = None
         logger.hr('第一阶段：初始记录获取', 2)
         best_rank, best_value = self._explore_record()

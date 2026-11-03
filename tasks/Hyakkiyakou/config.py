@@ -66,10 +66,10 @@ class DebugConfig(ConfigBase):
     # 单独的设定截屏间隔, 单位ms
     hya_interval: float = Field(default=300, description='hya_interval_help')
     # 单独的截屏设置
-    hya_screenshot_method: ScreenshotMethod = Field(default=ScreenshotMethod.WINDOW_BACKGROUND,
+    hya_screenshot_method: ScreenshotMethod = Field(default=ScreenshotMethod.NEMU_IPC,
                                                     description='hya_screenshot')
     # 单独的点击
-    hya_control_method: ControlMethod = Field(default=ControlMethod.WINDOW_MESSAGE,
+    hya_control_method: ControlMethod = Field(default=ControlMethod.MINITOUCH,
                                               description='hya_control_method')
 
     hide_fields = dynamic_hide('continuous_learning')

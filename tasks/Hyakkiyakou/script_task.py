@@ -135,7 +135,9 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
                 logger.info('Hyakkiyakou time limit out')
                 break
 
-            self.one()
+            if not self.one():
+                logger.error('Hyakkiyakou one() failed, stopping task')
+                break
             hya_count += 1
             logger.info(f'count: {hya_count}/{self.limit_count}')
             logger.info(f'time: {(datetime.now() - self.start_time).total_seconds():.1f}s/{self.limit_time.total_seconds()}s')
@@ -239,11 +241,18 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
     def one(self):
         self.reset_state()
         if not self.appear(self.I_HACCESS):
-            logger.warning('Page Error')
+            logger.warning('Page Error: I_HACCESS not found, waiting for page load...')
+            time.sleep(2)
+            if not self.appear(self.I_HACCESS):
+                logger.error('I_HACCESS still not found after 2s wait')
+                logger.error('Please update template image: tasks/Hyakkiyakou/hya/hya_haccess.png')
+                return False
         if self._config.hyakkiyakou_config.hya_invite_friend:
             self.invite_friend()
-        # start
-        self.ui_click(self.I_HACCESS, self.I_HSTART, interval=2)
+        # start with timeout to prevent infinite hang
+        if not self.ui_click(self.I_HACCESS, self.I_HSTART, interval=2, timeout=10):
+            logger.error('ui_click timeout: Failed to click I_HACCESS or reach I_HSTART')
+            return False
         self.wait_until_appear(self.I_HTITLE)
         # 这里改成：在三个候选中选择稀有度最高的作为鬼王
         self._best_boss_button = None
@@ -309,6 +318,7 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
         del self.debugger
         # you maybe update oashya
         self.tracker.clear_tracks()
+        return True
 
     def do_action(self, action: list, state):
         x, y, throw, bean = action
@@ -317,6 +327,43 @@ class ScriptTask(GameUi, HyaSlave, SwitchOnmyoji):
         if state[0] <= 0:
             return
         self.fast_click(x=x, y=y, control_method=self._config.debug_config.hya_control_method)
+
+    def save_template_image(self, name: str, roi: tuple):
+        """
+        Save current screenshot region as template image
+        Usage: Call this when game is showing the target UI element
+        :param name: Template name (e.g., 'hya_haccess')
+        :param roi: Region of interest (x, y, width, height)
+        """
+        self.screenshot()
+        x, y, w, h = roi
+        template = self.device.image[y:y+h, x:x+w]
+        save_path = f'./tasks/Hyakkiyakou/hya/{name}.png'
+        cv2.imwrite(save_path, template)
+        logger.info(f'Template saved: {save_path}')
+        return save_path
+
+
+def update_haccess_template():
+    """
+    Helper script to update I_HACCESS template image.
+    Run this when game is showing the Hyakkiyakou page with "进入" button.
+    """
+    from module.config.config import Config
+    from module.device.device import Device
+    
+    c = Config('oas1')
+    d = Device(c)
+    t = ScriptTask(c, d)
+    
+    # Navigate to Hyakkiyakou page
+    t.ui_goto_page(page_hyakkiyakou)
+    time.sleep(2)
+    
+    # Capture the "进入" button area
+    # I_HACCESS roi_front=(1070,570,100,100)
+    t.save_template_image('hya_haccess', (1070, 570, 100, 100))
+    logger.info('Template updated! Please restart the script.')
 
 
 if __name__ == '__main__':

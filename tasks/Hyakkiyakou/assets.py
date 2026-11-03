@@ -12,7 +12,7 @@ class HyakkiyakouAssets:
 
 	# Click Rule Assets
 	# description 
-	C_HSELECT_1 = RuleClick(roi_front=(200,318,115,273), roi_back=(200,318,115,273), name="hselect_1")
+	C_HSELECT_1 = RuleClick(roi_front=(250,318,115,273), roi_back=(250,318,115,273), name="hselect_1")
 	# description 
 	C_HSELECT_2 = RuleClick(roi_front=(570,307,142,285), roi_back=(570,307,142,285), name="hselect_2")
 	# description 
@@ -47,7 +47,7 @@ class HyakkiyakouAssets:
 	# 邀请按钮 
 	I_HINVITE = RuleImage(roi_front=(139,593,63,39), roi_back=(105,535,129,147), threshold=0.8, method="Template matching", file="./tasks/Hyakkiyakou/hya/hya_hinvite.png")
 	# 进入 
-	I_HACCESS = RuleImage(roi_front=(1059,554,100,100), roi_back=(1059,554,100,100), threshold=0.8, method="Template matching", file="./tasks/Hyakkiyakou/hya/hya_haccess.png")
+	I_HACCESS = RuleImage(roi_front=(1050,550,150,140), roi_back=(1050,550,150,140), threshold=0.8, method="Template matching", file="./tasks/Hyakkiyakou/hya/hya_haccess.png")
 	# 开始 
 	I_HSTART = RuleImage(roi_front=(1119,555,100,100), roi_back=(1119,555,100,100), threshold=0.8, method="Template matching", file="./tasks/Hyakkiyakou/hya/hya_hstart.png")
 	# 押注 

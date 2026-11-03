@@ -91,7 +91,7 @@ class AbyssShadowsAssets:
 	# description 
 	I_EQUIPPING = RuleImage(roi_front=(1126,545,100,83), roi_back=(1126,545,100,83), threshold=0.8, method="Template matching", file="./tasks/AbyssShadows/res/res_equipping.png")
 	# 确认退出战斗（智能伤害限时战斗提前退出时屏幕中心弹窗的确认按钮）
-	I_ABYSS_EXIT_CONFIRM = RuleImage(roi_front=(704,402,80,44), roi_back=(640,360,240,140), threshold=0.8, method="Template matching", file="./tasks/AbyssShadows/res/res_abyss_exit_confirm.png")
+	I_ABYSS_EXIT_CONFIRM = RuleImage(roi_front=(700,410,120,52), roi_back=(640,360,240,140), threshold=0.8, method="Template matching", file="./tasks/AbyssShadows/res/res_abyss_exit_confirm.png")
 
 
 	# List Rule Assets
